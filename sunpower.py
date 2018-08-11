@@ -2,22 +2,14 @@ import json
 import time
 from urllib import request
 
+from config import Config
+
 """
 SunPower does not provide a consumer accessible API.
 This has not stopped me.
 They do provide a website you can use to monitor your panels, so
 a bit of hackery is required.
- 1) Log in to the https://monitor.us.sunpower.com/#/dashboard site.
- 2) In your favorite browser of choice, open the Developer Tools
- 3) Watch the network traffic (you may need to reload the page)
- 4) You'll see a number of urls like:
-  https://monitor.us.sunpower.com/CustomerPortal/Alerts/Alerts.svc/GetAlerts?id=12345678-1234-1234-1234-1234567890ab
- 5) Copy the "id" value into the GUID below:
-"""
-
-GUID = "12345678-1234-1234-1234-1234567890ab"
-
-"""
+ 
 In HASS, I've set up the following custom sensor:
 
 sensor:
@@ -33,6 +25,51 @@ TODO:
         tip sunpower about their awesome site security model. ._.
 
 """
+
+
+def config():
+    """Return config values like username and password"""
+    try:
+        cfg = Config(open("sunpower.cfg", "r"))
+        assert cfg.username, "Username not defined in config"
+        assert cfg.password, "Password not defined in config"
+        if "offset" not in cfg:
+            cfg.offset = 300
+        return cfg
+    except Exception as ex:
+        print("Could not read configuration file: {}".format(ex))
+        raise
+
+
+def refresh_token(username, password):
+    login_url = "https://monitor.us.sunpower.com/CustomerPortal/Auth/Auth.svc/Authenticate"
+    payload = json.dumps({"username": username, "password": password})
+    req = request.Request(
+        url=login_url,
+        method="POST",
+        headers={"Content-Type":"application/json"},
+        data=payload.encode(),
+    )
+    with request.urlopen(req) as resp:
+        content = json.loads(resp.read().decode('utf-8'))
+        assert content["StatusCode"] == "200", "Fetch failed! {}".format(content)
+        expiry = time.time() + (content["Payload"]["ExpiresInMinutes"] * 60)
+        token = content["Payload"]["TokenID"]
+        return {"expiry": expiry, "TokenID": token}
+
+
+def check_token(username, password):
+    cred_file = "/tmp/sunpower.cred"
+    try:
+        with open(cred_file) as cred:
+            creds = json.loads(cred.read())
+            if time.time() < creds["expiry"]:
+                return creds["TokenID"]
+    except Exception as ex:
+        with open(cred_file, "w") as cred:
+            creds = refresh_token(username, password)
+            cred.write(json.dumps(creds))
+            return creds["TokenID"]
 
 
 def smooth(value):
@@ -60,14 +97,14 @@ def get_ts(offset_secs=0):
     return time.strftime(zulu, now)
 
 
-def fetch(offset=30):
+def fetch(tokenid, offset=30):
     """Fetch the data from SunPower. The panels update once every 5 minutes
     or so. """
 
     url = ("https://monitor.us.sunpower.com/CustomerPortal/SystemInfo/"
            "SystemInfo.svc/getPVProductionData")
     args = dict(
-            id=GUID,
+            id=tokenid,
             interval="minute",
             startDateTime=get_ts(-(offset*60)),
             endDateTime=get_ts(+120)
@@ -91,8 +128,9 @@ def fetch(offset=30):
         return json.loads(content)
 
 
-def latest_data(offset=30):
-    data = fetch(offset)
+def latest_data(config):
+    tokenid = check_token(config.username, config.password)
+    data = fetch(tokenid=tokenid, offset=config.offset)
     if int(data.get('StatusCode', 500)) != 200:
         raise Exception("Bad reply: {}".format(
             data.get('ResponseMessage', "Unknown")))
@@ -104,7 +142,7 @@ def latest_data(offset=30):
 
 def main():
     try:
-        print(latest_data())
+        print(latest_data(config()))
     except Exception as ex:
         print("Error:{}".format(ex))
 
