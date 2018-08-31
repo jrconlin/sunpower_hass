@@ -9,7 +9,7 @@ SunPower does not provide a consumer accessible API.
 This has not stopped me.
 They do provide a website you can use to monitor your panels, so
 a bit of hackery is required.
- 
+
 In HASS, I've set up the following custom sensor:
 
 sensor:
@@ -42,17 +42,19 @@ def config():
 
 
 def refresh_token(username, password):
-    login_url = "https://monitor.us.sunpower.com/CustomerPortal/Auth/Auth.svc/Authenticate"
+    login_url = ("https://monitor.us.sunpower.com/"
+            "CustomerPortal/Auth/Auth.svc/Authenticate")
     payload = json.dumps({"username": username, "password": password})
     req = request.Request(
         url=login_url,
         method="POST",
-        headers={"Content-Type":"application/json"},
+        headers={"Content-Type": "application/json"},
         data=payload.encode(),
     )
     with request.urlopen(req) as resp:
         content = json.loads(resp.read().decode('utf-8'))
-        assert content["StatusCode"] == "200", "Fetch failed! {}".format(content)
+        assert content["StatusCode"] == "200", "Fetch failed! {}".format(
+            content)
         expiry = time.time() + (content["Payload"]["ExpiresInMinutes"] * 60)
         token = content["Payload"]["TokenID"]
         return {"expiry": expiry, "TokenID": token}
@@ -146,5 +148,5 @@ def main():
     except Exception as ex:
         print("Error:{}".format(ex))
 
-
-main()
+if __name__ == '__main__':
+    main()
