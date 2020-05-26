@@ -42,36 +42,39 @@ def config():
 
 
 def refresh_token(username, password):
-    login_url = ("https://monitor.us.sunpower.com/"
-            "CustomerPortal/Auth/Auth.svc/Authenticate")
-    payload = json.dumps({"username": username, "password": password})
+    login_url = ("https://elhapi.edp.sunpower.com/v1/elh/authenticate")
+    payload = json.dumps(
+            {"username": username,
+             "password": password,
+             "isPersistent": False})
     req = request.Request(
         url=login_url,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json"},
         data=payload.encode(),
     )
-    with request.urlopen(req) as resp:
-        content = json.loads(resp.read().decode('utf-8'))
-        assert content["StatusCode"] == "200", "Fetch failed! {}".format(
-            content)
-        expiry = time.time() + (content["Payload"]["ExpiresInMinutes"] * 60)
-        token = content["Payload"]["TokenID"]
-        return {"expiry": expiry, "TokenID": token}
+    try:
+        with request.urlopen(req) as resp:
+            body = resp.read().decode('utf-8')
+            content = json.loads(body)
+            return content
+    except Exception as ex:
+        import pdb; pdb.set_trace()
+        print(ex)
 
-
-def check_token(username, password):
+def check_creds(username, password):
     cred_file = "/tmp/sunpower.cred"
     try:
         with open(cred_file) as cred:
             creds = json.loads(cred.read())
-            if time.time() < creds["expiry"]:
-                return creds["TokenID"]
+            if time.time() < creds["expiresEpm"]:
+                return creds
     except Exception as ex:
         with open(cred_file, "w") as cred:
             creds = refresh_token(username, password)
             cred.write(json.dumps(creds))
-            return creds["TokenID"]
+            return creds
 
 
 def smooth(value):
@@ -99,21 +102,20 @@ def get_ts(offset_secs=0):
     return time.strftime(zulu, now)
 
 
-def fetch(tokenid, offset=30):
+def fetch(creds, offset=30):
     """Fetch the data from SunPower. The panels update once every 5 minutes
     or so. """
 
-    url = ("https://monitor.us.sunpower.com/CustomerPortal/SystemInfo/"
-           "SystemInfo.svc/getPVProductionData")
+    url = ("https://elhapi.edp.sunpower.com/v2/elh/address/{}/power".format(creds.get("addressId")))
     args = dict(
-            id=tokenid,
-            interval="minute",
-            startDateTime=get_ts(-(offset*60)),
-            endDateTime=get_ts(+120)
+            interval="FIVE_MINUTE",
+            starttime=get_ts(-(offset*10)),
+            endtime=get_ts(+10)
             )
     headers = {
             'Accept': "application/json, text/plain",
             'Accept-Language': "en-US;en;q=0.5",
+            'Authorization': "SP-CUSTOM {}".format(creds.get("tokenID")),
             }
 
     # can't use requests because ":"
@@ -131,14 +133,14 @@ def fetch(tokenid, offset=30):
 
 
 def latest_data(config):
-    tokenid = check_token(config.username, config.password)
-    data = fetch(tokenid=tokenid, offset=config.offset)
-    if int(data.get('StatusCode', 500)) != 200:
-        raise Exception("Bad reply: {}".format(
-            data.get('ResponseMessage', "Unknown")))
-
-    current = data.get('Payload', {
-        }).get('CurrentProduction', {}).get('value', 0)
+    creds = check_creds(config.username, config.password)
+    data = fetch(creds, offset=config.offset)
+    current = data.get('powerData')[-1].split(',')[2]
+    """
+    for row in data.get('powerData'):
+        (time, current) = row.split(',')[:2]
+        print("{}\t{}".format(time,current))
+    """
     return smooth(float(current))
 
 
