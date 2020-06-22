@@ -35,7 +35,7 @@ In [HASS](http://homeassistant.io/), I've set up the following custom sensor:
 ```yaml
 sensor:
   - platform: command_line
-    scan_interval: 300
+    scan_interval: 1800
     name: Solar Production
     command: reading
     unit_of_measurement: "kW"
@@ -52,4 +52,25 @@ sensor:
 
 * Make this a proper HASS module.
 
+## More Info Than You Want
 
+I have no idea why they make this hard.
+
+First off, your sunpower unit sends updates of the current power load
+every five minutes. For reasons, the site updates data once an hour.
+
+Sunpower's site system breaks fairly frequently with connectivity
+issues causing data backlogs (they appear as dips & spikes as data is
+accumulated).
+
+There are no published endpoints that let you query the data locally.
+
+I do my best to be as kind as possible here, the script only queries
+once per hour and logs in like any browser client would.
+
+The monitoring panel does not appear to have any TCP socket we can
+read, nor does it use the  so yay? good security?
+
+Still, kinda dumb that a device, sitting on your network doesn't
+expose a simple port that returns just the current power generation
+level.

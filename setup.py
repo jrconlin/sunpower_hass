@@ -38,7 +38,7 @@ setup(name="sunpower_hass",
       tests_require=['nose', 'coverage', 'mock>=1.0.1'],
       entry_points="""
       [console_scripts]
-      reading = sunpower.main:main
+      reading = sunpower.sunpower:main
       """,
       **extra_options
       )

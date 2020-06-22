@@ -1,5 +1,9 @@
+#! /home/hass/home-assistant/bin/python
+import argparse
 import json
+import os
 import time
+
 from urllib import request
 
 from config import Config
@@ -29,50 +33,74 @@ TODO:
 
 def config():
     """Return config values like username and password"""
+    cwd = os.getcwd()
+    parser = argparse.ArgumentParser(description="Sunpower power reading", allow_abbrev=True)
+    parser.add_argument(
+        '--conf', '-c', dest="configuration",
+        default="{}/sunpower.cfg".format(cwd), help="Configuration file")
+    parser.add_argument(
+        '-v', dest="verbose", action="store_true", default=False,
+        help="verbose")
+    args = parser.parse_args()
+
     try:
-        cfg = Config(open("sunpower.cfg", "r"))
-        assert cfg.username, "Username not defined in config"
-        assert cfg.password, "Password not defined in config"
+        cfg = Config(open(args.configuration, "r")).as_dict()
+        assert cfg.get("username"), "Username not defined in config"
+        assert cfg.get("password"), "Password not defined in config"
         if "offset" not in cfg:
-            cfg.offset = 300
+            cfg["offset"] = 300
+        cfg['verbose'] = args.verbose
         return cfg
     except Exception as ex:
-        print("Could not read configuration file: {}".format(ex))
+        print(
+                "Could not read configuration file: "
+                "{}: {}".format(
+                    args.configuration,
+                    ex)
+            )
         raise
 
 
-def refresh_token(username, password):
+def refresh_token(cfg):
     login_url = ("https://elhapi.edp.sunpower.com/v1/elh/authenticate")
     payload = json.dumps(
-            {"username": username,
-             "password": password,
+            {"username": cfg.get("username"),
+             "password": cfg.get("password"),
              "isPersistent": False})
     req = request.Request(
         url=login_url,
         method="POST",
         headers={
-            "Content-Type": "application/json"},
+            "Content-Type": "application/json",
+            "origin": "https://monitor.us.sunpower.com",
+            "referer": "https://monitor.us.sunpower.com",
+            },
         data=payload.encode(),
     )
     try:
+        if cfg.get("verbose", False):
+            print ("Fetching {}".format(login_url))
         with request.urlopen(req) as resp:
             body = resp.read().decode('utf-8')
+            if cfg.get("verbose", False):
+                print(body)
             content = json.loads(body)
             return content
     except Exception as ex:
-        import pdb; pdb.set_trace()
-        print(ex)
+        print("Could not fetch: {}", ex)
 
-def check_creds(username, password):
+def check_creds(config, clear=False):
     cred_file = "/tmp/sunpower.cred"
+    if clear:
+        os.unlink(cred_file)
     try:
         with open(cred_file) as cred:
             creds = json.loads(cred.read())
-            if time.time() < creds["expiresEpm"]:
+            if int(time.time() * 1000) < creds["expiresEpm"]:
                 return creds
     except Exception as ex:
         with open(cred_file, "w") as cred:
-            creds = refresh_token(username, password)
+            creds = refresh_token(config)
             cred.write(json.dumps(creds))
             return creds
 
@@ -102,12 +130,12 @@ def get_ts(offset_secs=0):
     return time.strftime(zulu, now)
 
 
-def fetch(creds, offset=30):
+def fetch(creds, config, offset=30):
     """Fetch the data from SunPower. The panels update once every 5 minutes
     or so. """
 
     url = ("https://elhapi.edp.sunpower.com/v2/elh/address/{}/power".format(creds.get("addressId")))
-    args = dict(
+    uri_args = dict(
             interval="FIVE_MINUTE",
             starttime=get_ts(-(offset*10)),
             endtime=get_ts(+10)
@@ -120,35 +148,43 @@ def fetch(creds, offset=30):
 
     # can't use requests because ":"
     arg_list = []
-    for arg in args.items():
+    for arg in uri_args.items():
         arg_list.append("{}={}".format(arg[0], arg[1]))
     url = "{}?{}".format(url, "&".join(arg_list))
-    req = request.Request(
-            url=url,
-            headers=headers,
-            method="GET")
-    with request.urlopen(req) as resp:
-        content = resp.read().decode('utf-8')
-        return json.loads(content)
+    try:
+        req = request.Request(
+                url=url,
+                headers=headers,
+                method="GET")
+        with request.urlopen(req) as resp:
+            content = resp.read().decode('utf-8')
+            if config.get("verbose", False):
+                print(content)
+            return json.loads(content)
+    except Exception as ex:
+        import pdb; pdb.set_trace()
+        print(ex)
 
 
 def latest_data(config):
-    creds = check_creds(config.username, config.password)
-    data = fetch(creds, offset=config.offset)
+    creds = check_creds(config)
+    if not creds:
+        creds = check_creds(config, True)
+    if not creds:
+        raise Exception("Could not log in")
+    data = fetch(creds, config, offset=config.get("offset"))
     current = data.get('powerData')[-1].split(',')[2]
     """
     for row in data.get('powerData'):
         (time, current) = row.split(',')[:2]
         print("{}\t{}".format(time,current))
     """
-    return smooth(float(current))
+    return format(float(current), '.2f')
+    #return format(smooth(float(current)), '.2f')
 
 
 def main():
-    try:
-        print(latest_data(config()))
-    except Exception as ex:
-        print("Error:{}".format(ex))
+    print(latest_data(config()))
 
 if __name__ == '__main__':
     main()
