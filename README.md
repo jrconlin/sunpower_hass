@@ -9,7 +9,7 @@ of hackery is required.
 
 ## *_Please note_:*
 As metioned, the SunPower "API" leaves much to be desired. I'm probably not going to continue messing with trying to pull data out of the web-API and have sinced moved to
-[direct](_direct_) access of the data via the Sunpower controller box.
+[_direct_](direct) access of the data via the Sunpower controller box.
 
 ## Installing
 I'd recommend installing this using python `virtualenv`. If you're not familiar with the python installation incantation, it's:
