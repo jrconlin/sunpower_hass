@@ -7,9 +7,12 @@ This is a quick sensor script that can be used by [HomeAssistant](http://homeass
 They do provide a website you can use to monitor your panels, so a bit
 of hackery is required.
 
+## *_Please note_:*
+As metioned, the SunPower "API" leaves much to be desired. I'm probably not going to continue messing with trying to pull data out of the web-API and have sinced moved to
+[direct](_direct_) access of the data via the Sunpower controller box.
+
 ## Installing
-I'd recommend installing this using python `virtualenv`. If you're not familiar with the
-python installation incantation, it's:
+I'd recommend installing this using python `virtualenv`. If you're not familiar with the python installation incantation, it's:
 
 ```bash
 $ virtualenv -p python3 venv
@@ -48,8 +51,6 @@ sensor:
 ```
 )
 
-##TODO:
+## TODO:
 
 * Make this a proper HASS module.
-
-
