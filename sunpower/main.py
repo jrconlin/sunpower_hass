@@ -1,5 +1,9 @@
+#! /home/hass/home-assistant/bin/python
+import argparse
 import json
+import os
 import time
+
 from urllib import request
 
 from config import Config
@@ -29,49 +33,90 @@ TODO:
 
 def config():
     """Return config values like username and password"""
+    cwd = os.getcwd()
+    parser = argparse.ArgumentParser(
+        description="Sunpower power reading",
+        allow_abbrev=True)
+    parser.add_argument(
+        '--conf', '-c', dest="configuration",
+        default="{}/sunpower.cfg".format(cwd),
+        help="Configuration file")
+    parser.add_argument(
+        '-v', dest="verbose", action="store_true", default=False,
+        help="verbose")
+    parser.add_argument(
+        '--smooth', '-s',
+        dest="smooth",
+        action="store_true", default=False,
+        help="smooth the data",
+    )
+    args = parser.parse_args()
+
     try:
-        cfg = Config(open("sunpower.cfg", "r"))
-        assert cfg.username, "Username not defined in config"
-        assert cfg.password, "Password not defined in config"
-        if "offset" not in cfg:
-            cfg.offset = 300
-        return cfg
+        cfg = Config(open(args.configuration, "r")).as_dict()
+        assert cfg.get("username"), "Username not defined in config"
+        assert cfg.get("password"), "Password not defined in config"
+        defaults = {
+            "offset": 300,
+            "verbose": args.verbose,
+            "smooth": args.smooth
+        }
+        defaults.update(cfg)
+        return defaults
     except Exception as ex:
-        print("Could not read configuration file: {}".format(ex))
+        print(
+                "Could not read configuration file: "
+                "{}: {}".format(
+                    args.configuration,
+                    ex)
+            )
         raise
 
 
-def refresh_token(username, password):
-    login_url = ("https://monitor.us.sunpower.com/"
-            "CustomerPortal/Auth/Auth.svc/Authenticate")
-    payload = json.dumps({"username": username, "password": password})
+def refresh_token(cfg):
+    login_url = ("https://elhapi.edp.sunpower.com/v1/elh/authenticate")
+    payload = json.dumps(
+            {"username": cfg.get("username"),
+             "password": cfg.get("password"),
+             "isPersistent": False})
     req = request.Request(
         url=login_url,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "origin": "https://monitor.us.sunpower.com",
+            "referer": "https://monitor.us.sunpower.com",
+            },
         data=payload.encode(),
     )
-    with request.urlopen(req) as resp:
-        content = json.loads(resp.read().decode('utf-8'))
-        assert content["StatusCode"] == "200", "Fetch failed! {}".format(
-            content)
-        expiry = time.time() + (content["Payload"]["ExpiresInMinutes"] * 60)
-        token = content["Payload"]["TokenID"]
-        return {"expiry": expiry, "TokenID": token}
+    try:
+        if cfg.get("verbose", False):
+            print("Fetching {}".format(login_url))
+        with request.urlopen(req) as resp:
+            body = resp.read().decode('utf-8')
+            if cfg.get("verbose", False):
+                print(body)
+            content = json.loads(body)
+            return content
+    except Exception as ex:
+        print("⚠ Could not fetch: {}", ex)
 
 
-def check_token(username, password):
+def check_creds(config, clear=False):
     cred_file = "/tmp/sunpower.cred"
+    if clear:
+        os.unlink(cred_file)
     try:
         with open(cred_file) as cred:
             creds = json.loads(cred.read())
-            if time.time() < creds["expiry"]:
-                return creds["TokenID"]
+            if int(time.time() * 1000) < creds["expiresEpm"]:
+                return creds
     except Exception as ex:
+        print("⚠ Auth fail: {}".format(ex))
         with open(cred_file, "w") as cred:
-            creds = refresh_token(username, password)
+            creds = refresh_token(config)
             cred.write(json.dumps(creds))
-            return creds["TokenID"]
+            return creds
 
 
 def smooth(value):
@@ -99,54 +144,75 @@ def get_ts(offset_secs=0):
     return time.strftime(zulu, now)
 
 
-def fetch(tokenid, offset=30):
+def fetch(creds, config, offset=30):
     """Fetch the data from SunPower. The panels update once every 5 minutes
     or so. """
 
-    url = ("https://monitor.us.sunpower.com/CustomerPortal/SystemInfo/"
-           "SystemInfo.svc/getPVProductionData")
-    args = dict(
-            id=tokenid,
-            interval="minute",
-            startDateTime=get_ts(-(offset*60)),
-            endDateTime=get_ts(+120)
+    now = time.time()
+    url = ("https://elhapi.edp.sunpower.com/v2/elh/address/{}/power".format(
+        creds.get("addressId")))
+    uri_args = dict(
+            interval="FIVE_MINUTE",
+            starttime=get_ts(-(offset*10)),
+            endtime=get_ts(+10)
             )
     headers = {
             'Accept': "application/json, text/plain",
             'Accept-Language': "en-US;en;q=0.5",
+            'Authorization': "SP-CUSTOM {}".format(
+                creds.get("tokenID")),
             }
 
     # can't use requests because ":"
     arg_list = []
-    for arg in args.items():
+    for arg in uri_args.items():
         arg_list.append("{}={}".format(arg[0], arg[1]))
     url = "{}?{}".format(url, "&".join(arg_list))
-    req = request.Request(
-            url=url,
-            headers=headers,
-            method="GET")
-    with request.urlopen(req) as resp:
-        content = resp.read().decode('utf-8')
-        return json.loads(content)
+    try:
+        req = request.Request(
+                url=url,
+                headers=headers,
+                method="GET")
+        with request.urlopen(req) as resp:
+            content = resp.read().decode('utf-8')
+            if config.get("verbose", False):
+                print(content)
+                print("{} secs".format(time.time()-now))
+            return json.loads(content)
+    except Exception as ex:
+        print("⚠ {}".format(ex))
 
 
 def latest_data(config):
-    tokenid = check_token(config.username, config.password)
-    data = fetch(tokenid=tokenid, offset=config.offset)
-    if int(data.get('StatusCode', 500)) != 200:
-        raise Exception("Bad reply: {}".format(
-            data.get('ResponseMessage', "Unknown")))
-
-    current = data.get('Payload', {
-        }).get('CurrentProduction', {}).get('value', 0)
-    return smooth(float(current))
+    creds = check_creds(config)
+    if not creds:
+        creds = check_creds(config, True)
+    if not creds:
+        raise Exception("Could not log in")
+    data = fetch(creds, config, offset=config.get("offset"))
+    try:
+        current = data.get('powerData')[-1].split(',')[2]
+    except IndexError:
+        return 0
+    except Exception as ex:
+        print("⚠{}, returned value: {}".format(ex, data))
+        return 0
+    """
+    for row in data.get('powerData'):
+        (time, current) = row.split(',')[:2]
+        print("{}\t{}".format(time,current))
+    """
+    if config.get("smooth", False):
+        return format(smooth(float(current)), '.2f')
+    return format(float(current), '.2f')
 
 
 def main():
-    try:
-        print(latest_data(config()))
-    except Exception as ex:
-        print("Error:{}".format(ex))
+    latest = latest_data(config())
+    print(latest)
+    with open("/tmp/sunpower", "w") as out:
+        out.write(latest)
+
 
 if __name__ == '__main__':
     main()
